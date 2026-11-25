@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import Image from 'next/image'
 import {
+  Archive,
   ArrowRight,
   BookOpenCheck,
   Building2,
@@ -19,6 +20,7 @@ import {
   LayoutDashboard,
   Menu,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   TicketCheck,
@@ -59,6 +61,7 @@ interface Room {
   location: string
   capacity: number
   status: RoomStatus
+  isArchived: boolean
   occupiedFrom: string | null
   occupiedUntil: string | null
   facilities: string
@@ -80,6 +83,7 @@ interface Ticket {
   requesterName: string
   photoName: string | null
   photoData: string | null
+  photoPath: string | null
   createdAt: string
   status: TicketStatus
   rejectionNote?: string | null
@@ -147,7 +151,7 @@ interface RecommendationDraft {
 
 const ROLES: { id: Role; label: string; description: string }[] = [
   { id: 'guru', label: 'Guru / Wali Kelas', description: 'Mengajukan booking dan laporan' },
-  { id: 'sarpras', label: 'Wakasek Sarpras', description: 'Memeriksa dan memberi rekomendasi' },
+  { id: 'sarpras', label: 'Wakasek Sarpras', description: 'Memeriksa usulan dan mengelola data ruangan' },
   { id: 'kepsek', label: 'Kepala Sekolah', description: 'Memberi keputusan akhir' },
   { id: 'admin', label: 'Admin', description: 'Mengelola akun dan data ruangan' },
 ]
@@ -199,7 +203,7 @@ const NAVIGATION: { id: View; label: string; icon: typeof LayoutDashboard; roles
   { id: 'booking', label: 'Booking ruangan', icon: CalendarDays, roles: ['guru', 'sarpras', 'kepsek', 'admin'] },
   { id: 'dataset', label: 'Dataset', icon: Building2, roles: ['guru', 'sarpras', 'kepsek', 'admin'] },
   { id: 'reviews', label: 'Perlu ditinjau', icon: ClipboardCheck, roles: ['sarpras', 'kepsek'] },
-  { id: 'rooms', label: 'Data ruangan', icon: Building2, roles: ['admin'] },
+  { id: 'rooms', label: 'Data ruangan', icon: Building2, roles: ['sarpras', 'admin'] },
   { id: 'accounts', label: 'Kelola akun', icon: Users, roles: ['admin'] },
 ]
 
@@ -488,6 +492,7 @@ export default function HomePage() {
       const rooms = (roomsResult.data ?? []).map((room) => ({
         id: room.id, code: room.code, name: room.name, location: room.location, capacity: room.capacity,
         status: room.status === 'tersedia' ? 'tersedia' as const : 'tentatif' as const,
+        isArchived: room.is_archived ?? false,
         occupiedFrom: room.occupied_from, occupiedUntil: room.occupied_until, facilities: room.facilities ?? 'Belum dicantumkan.',
       }))
       const inventoryItems = (inventoryResult.data ?? []).map((item) => ({
@@ -527,7 +532,7 @@ export default function HomePage() {
           damagedQuantity: ticket.damaged_quantity ?? null,
           damageSeverity: ticket.damage_severity as DamageSeverity | null ?? null,
           requesterName: ticket.reported_by_name ?? 'Pengaju',
-          photoName: ticket.photo_url ? 'Foto terlampir' : null, photoData: photoUrl,
+          photoName: ticket.photo_url ? 'Foto terlampir' : null, photoData: photoUrl, photoPath: ticket.photo_url ?? null,
           createdAt: ticket.created_at, status: ticket.status as TicketStatus, rejectionNote: ticket.decision_note ?? null,
           rejectionStage: ticket.rejection_stage as TicketStatus | null,
           sarprasReport: ticket.sarpras_report ?? null,
@@ -543,7 +548,7 @@ export default function HomePage() {
       }))
       setData({ role, rooms, bookings, tickets, accounts })
       setInventoryItems(inventoryItems)
-      setBookingRoom((selected) => rooms.some((room) => room.id === selected) ? selected : rooms[0]?.id ?? '')
+      setBookingRoom((selected) => rooms.some((room) => room.id === selected && !room.isArchived) ? selected : rooms.find((room) => !room.isArchived)?.id ?? '')
       setReady(true)
     }
     loadFromSupabase().catch((error: unknown) => {
@@ -654,7 +659,7 @@ export default function HomePage() {
   )
   const currentView = NAVIGATION.find((item) => item.id === view)
   const activeRoom = data.rooms.find((room) => room.id === bookingRoom)
-  const bookableRooms = data.rooms.filter((room) => room.status === 'tersedia')
+  const bookableRooms = data.rooms.filter((room) => !room.isArchived && room.status === 'tersedia')
   const currentTickets = data.tickets
   const currentBookings = data.bookings
 
@@ -910,7 +915,7 @@ export default function HomePage() {
       roomId: saved.room_id, roomName: room.name, inventoryItemId: saved.inventory_item_id,
       damagedQuantity: saved.damaged_quantity, damageSeverity: null,
       requesterName: saved.reported_by_name ?? profile?.fullName ?? 'Pengaju',
-      photoName: photo ? 'Foto terlampir' : null, photoData: photoUrl,
+      photoName: photo ? 'Foto terlampir' : null, photoData: photoUrl, photoPath,
       createdAt: saved.created_at, status: saved.status as TicketStatus,
       rejectionNote: null, rejectionStage: null, sarprasReport: null, sarprasReportPath: null,
     }
@@ -1177,6 +1182,49 @@ export default function HomePage() {
     setOpenPhoto({ name, url })
   }
 
+  async function deleteTickets(ticketIds: string[]) {
+    if (!supabase || profile?.role !== 'admin' || ticketIds.length === 0) {
+      announce('Hanya Admin yang dapat menghapus laporan kerusakan.')
+      return false
+    }
+    const ticketsToDelete = data.tickets.filter((ticket) => ticketIds.includes(ticket.id))
+    if (ticketsToDelete.length !== ticketIds.length) {
+      announce('Sebagian laporan yang dipilih sudah tidak tersedia. Muat ulang daftar lalu coba lagi.')
+      return false
+    }
+    const { data: deletedRows, error } = await supabase.from('damage_tickets').delete().in('id', ticketIds).select('id')
+    if (error || !deletedRows || deletedRows.length !== ticketIds.length) {
+      announce(`Laporan kerusakan gagal dihapus: ${error?.message ?? 'akses ditolak atau data sudah berubah'}`)
+      return false
+    }
+
+    setData((previous) => ({ ...previous, tickets: previous.tickets.filter((ticket) => !ticketIds.includes(ticket.id)) }))
+    const photoPaths = ticketsToDelete.map((ticket) => ticket.photoPath).filter((path): path is string => Boolean(path))
+    const reportPaths = ticketsToDelete.map((ticket) => ticket.sarprasReportPath).filter((path): path is string => Boolean(path))
+    const cleanupErrors: string[] = []
+    if (photoPaths.length > 0) {
+      const { error: cleanupError } = await supabase.storage.from('damage-photos').remove(photoPaths)
+      if (cleanupError) cleanupErrors.push(cleanupError.message)
+    }
+    if (reportPaths.length > 0) {
+      const { error: cleanupError } = await supabase.storage.from('sarpras-reports').remove(reportPaths)
+      if (cleanupError) cleanupErrors.push(cleanupError.message)
+    }
+    const { data: inventoryRows, error: inventoryError } = await supabase.from('room_inventory_items').select('*').eq('is_active', true).order('name')
+    if (inventoryError) cleanupErrors.push(`Dataset barang tidak dapat diperbarui: ${inventoryError.message}`)
+    else setInventoryItems((inventoryRows ?? []).map((item) => ({
+      id: item.id, roomId: item.room_id, name: item.name, quantity: item.quantity,
+      activeDamagedQuantity: item.active_damaged_quantity, isActive: item.is_active,
+    })))
+
+    if (cleanupErrors.length > 0) {
+      announce(`${deletedRows.length} laporan dihapus, tetapi sebagian foto, PDF, atau dataset belum berhasil diperbarui: ${cleanupErrors.join('; ')}`)
+    } else {
+      announce(`${deletedRows.length} laporan kerusakan berhasil dihapus.`)
+    }
+    return true
+  }
+
   async function deleteBookings(bookingIds: string[]) {
     if (!supabase || profile?.role !== 'admin' || bookingIds.length === 0) {
       announce('Hanya Admin yang dapat menghapus riwayat booking.')
@@ -1303,25 +1351,80 @@ export default function HomePage() {
     announce('Jadwal pemakaian ruangan dihapus dari Supabase.')
   }
 
+  async function setRoomArchived(roomId: string, isArchived: boolean) {
+    if (!supabase) return
+    const room = data.rooms.find((item) => item.id === roomId)
+    if (!room) return
+    const { error } = await supabase.from('rooms').update({ is_archived: isArchived, updated_at: new Date().toISOString() }).eq('id', roomId)
+    if (error) {
+      announce(`Status arsip ruangan gagal diperbarui: ${error.message}`)
+      return
+    }
+    setData((previous) => ({ ...previous, rooms: previous.rooms.map((item) => item.id === roomId ? { ...item, isArchived } : item) }))
+    if (isArchived) setBookingRoom((current) => current === roomId
+      ? data.rooms.find((item) => item.id !== roomId && !item.isArchived)?.id ?? ''
+      : current)
+    announce(isArchived ? `Ruangan ${room.name} diarsipkan. Riwayat booking tetap tersimpan.` : `Ruangan ${room.name} dipulihkan dari arsip.`)
+  }
+
   async function deleteRoom(roomId: string) {
     if (!supabase) return
     const room = data.rooms.find((item) => item.id === roomId)
     if (!room) return
-    if (!window.confirm(`Hapus ruangan ${room.name} (${room.code})? Tindakan ini tidak dapat dibatalkan.`)) return
+    if (!window.confirm(`Hapus permanen ${room.name} (${room.code})? Semua riwayat booking ruangan ini akan ikut dihapus. Tindakan ini tidak dapat dibatalkan.`)) return
 
     const { error } = await supabase.from('rooms').delete().eq('id', roomId)
     if (error) {
-      if (error.code === '23503') {
-        announce(`Ruangan ${room.name} tidak dapat dihapus karena masih memiliki riwayat booking. Tandai tentatif agar tidak dipilih untuk booking baru.`)
-      } else {
-        announce(`Ruangan gagal dihapus: ${error.message}`)
-      }
+      announce(`Ruangan ${room.name} tidak dapat dihapus permanen: ${error.message}`)
       return
     }
 
-    setData((previous) => ({ ...previous, rooms: previous.rooms.filter((item) => item.id !== roomId) }))
+    setData((previous) => ({
+      ...previous,
+      rooms: previous.rooms.filter((item) => item.id !== roomId),
+      bookings: previous.bookings.filter((booking) => booking.roomId !== roomId),
+      tickets: previous.tickets.map((ticket) => ticket.roomId === roomId ? { ...ticket, roomId: null, roomName: null } : ticket),
+    }))
+    setInventoryItems((previous) => previous.filter((item) => item.roomId !== roomId))
     setBookingRoom((current) => current === roomId ? '' : current)
-    announce(`Ruangan ${room.name} berhasil dihapus.`)
+    announce(`Ruangan ${room.name} beserta riwayat bookingnya berhasil dihapus permanen.`)
+  }
+
+  async function updateRoom(roomId: string, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const name = String(form.get('name') ?? '').trim()
+    const code = String(form.get('code') ?? '').trim()
+    const location = String(form.get('location') ?? '').trim()
+    const capacity = Number(form.get('capacity'))
+    const facilities = String(form.get('facilities') ?? '').trim()
+    if (!name || !code || !location || !Number.isInteger(capacity) || capacity < 1) {
+      announce('Isi nama, kode, lokasi, dan kapasitas ruangan yang valid.')
+      return false
+    }
+    const conflictingBooking = data.bookings.find((booking) =>
+      booking.roomId === roomId && ACTIVE_BOOKING_STATUSES.has(booking.status)
+      && booking.requestedCapacity > capacity
+      && new Date(`${booking.date}T${booking.end}:00`).getTime() > Date.now(),
+    )
+    if (conflictingBooking) {
+      announce(`Kapasitas tidak dapat dikurangi. Booking ${formatDate(conflictingBooking.date)} masih membutuhkan ${conflictingBooking.requestedCapacity} orang.`)
+      return false
+    }
+    if (!supabase) return false
+    const { data: saved, error } = await supabase.from('rooms').update({
+      name, code, location, capacity, facilities: facilities || null, updated_at: new Date().toISOString(),
+    }).eq('id', roomId).select('*').single()
+    if (error) {
+      announce(`Perubahan data ruangan gagal disimpan: ${error.message}`)
+      return false
+    }
+    setData((previous) => ({ ...previous, rooms: previous.rooms.map((room) => room.id === roomId ? {
+      ...room, name: saved.name, code: saved.code, location: saved.location, capacity: saved.capacity,
+      facilities: saved.facilities ?? 'Belum dicantumkan.',
+    } : room) }))
+    announce(`Data ruangan ${saved.name} berhasil diperbarui.`)
+    return true
   }
 
   async function addRoom(event: FormEvent<HTMLFormElement>) {
@@ -1331,19 +1434,20 @@ export default function HomePage() {
     const code = String(form.get('code') ?? '').trim()
     const location = String(form.get('location') ?? '').trim()
     const capacity = Number(form.get('capacity'))
-    if (!name || !code || !location || capacity < 1) {
-      announce('Lengkapi nama, kode, lokasi, dan kapasitas ruangan.')
+    const facilities = String(form.get('facilities') ?? '').trim()
+    if (!name || !code || !location || !Number.isInteger(capacity) || capacity < 1) {
+      announce('Lengkapi nama, kode, lokasi, dan kapasitas ruangan yang valid.')
       return
     }
     if (!supabase) return
-    const { data: saved, error } = await supabase.from('rooms').insert({ code, name, location, capacity, status: 'tentatif', facilities: null }).select('*').single()
+    const { data: saved, error } = await supabase.from('rooms').insert({ code, name, location, capacity, status: 'tentatif', facilities: facilities || null }).select('*').single()
     if (error) {
       announce(`Ruangan gagal ditambahkan: ${error.message}`)
       return
     }
     const room: Room = {
       id: saved.id, code: saved.code, name: saved.name, location: saved.location, capacity: saved.capacity,
-      status: 'tentatif', occupiedFrom: saved.occupied_from, occupiedUntil: saved.occupied_until, facilities: saved.facilities ?? 'Belum dicantumkan.',
+      status: 'tentatif', isArchived: false, occupiedFrom: saved.occupied_from, occupiedUntil: saved.occupied_until, facilities: saved.facilities ?? 'Belum dicantumkan.',
     }
     setData((previous) => ({ ...previous, rooms: [...previous.rooms, room] }))
     event.currentTarget.reset()
@@ -1513,6 +1617,7 @@ export default function HomePage() {
                   tickets={currentTickets}
                   onNavigate={changeView}
                   onUpdate={updateTicket}
+                  onDeleteTickets={deleteTickets}
                   onPrepareReport={prepareTicketRecommendation}
                   onOpenPhoto={openTicketPhoto}
                   onReadReport={readSarprasReport}
@@ -1567,13 +1672,15 @@ export default function HomePage() {
                   onOpenPhoto={openTicketPhoto}
                 />
               )}
-              {view === 'rooms' && role === 'admin' && (
+              {view === 'rooms' && (role === 'admin' || role === 'sarpras') && (
                 <RoomsView
                   rooms={data.rooms}
                   now={now}
                   onToggle={toggleRoom}
                   onAdd={addRoom}
+                  onUpdateRoom={updateRoom}
                   onDelete={deleteRoom}
+                  onSetArchived={setRoomArchived}
                   onSetOccupancy={setRoomOccupancy}
                   onClearOccupancy={clearRoomOccupancy}
                 />
@@ -1677,7 +1784,7 @@ function DashboardView({
     admin: 'Kelola akun pengguna dan data ruangan sekolah.',
   }
   const visibleTickets = role === 'guru' ? tickets : tickets
-  const availableRoomCount = rooms.filter((room) => room.status === 'tersedia').length
+  const availableRoomCount = rooms.filter((room) => !room.isArchived && room.status === 'tersedia').length
 
   return (
     <div className="page-stack">
@@ -1720,9 +1827,12 @@ function DashboardView({
           <div className="review-banner-icon"><ClipboardCheck size={22} /></div>
           <div className="review-banner-copy">
             <h3>Daftar tinjauan Sarpras</h3>
-            <p>Periksa usulan, verifikasi kondisi di lapangan, dan kirim rekomendasi ke Kepala Sekolah.</p>
+            <p>Periksa usulan, verifikasi kondisi di lapangan, kirim rekomendasi, dan kelola data ruangan.</p>
           </div>
-          <button className="button button-primary" onClick={() => onNavigate('reviews')}>Buka tinjauan <ArrowRight size={16} /></button>
+          <div className="admin-banner-actions">
+            <button className="button button-primary" onClick={() => onNavigate('reviews')}>Buka tinjauan <ArrowRight size={16} /></button>
+            <button className="button button-quiet" onClick={() => onNavigate('rooms')}>Kelola ruangan <Building2 size={16} /></button>
+          </div>
         </section>
       ) : role === 'kepsek' ? (
         <section className="review-banner">
@@ -1772,7 +1882,7 @@ function DashboardView({
               <p>Jam penggunaan sekolah: Senin sampai Minggu, 07.00–16.00</p>
             </div>
           </div>
-          {rooms.map((room) => {
+          {rooms.filter((room) => !room.isArchived).map((room) => {
                     const currentUse = currentRoomUse(room, bookings, now)
             const status = currentUse?.label ?? (room.status === 'tersedia' ? 'Tersedia' : 'Tentatif')
             return <div className="room-mini" key={room.id}>
@@ -1820,6 +1930,7 @@ function TicketsView({
   tickets,
   onNavigate,
   onUpdate,
+  onDeleteTickets,
   onPrepareReport,
   onOpenPhoto,
   onReadReport,
@@ -1828,17 +1939,47 @@ function TicketsView({
   tickets: Ticket[]
   onNavigate: (view: View) => void
   onUpdate: (id: string, status: TicketStatus, damageSeverity?: DamageSeverity) => void
+  onDeleteTickets: (ids: string[]) => Promise<boolean>
   onPrepareReport: (ticket: Ticket) => void
   onOpenPhoto: (name: string, url: string) => void
   onReadReport: (path: string | null, name: string) => void
 }) {
   const shown = role === 'guru' ? tickets : tickets
+  const isAdmin = role === 'admin'
   const [severityDrafts, setSeverityDrafts] = useState<Record<string, DamageSeverity | ''>>({})
+  const [selectedTicketIds, setSelectedTicketIds] = useState<string[]>([])
+  const [deletingTickets, setDeletingTickets] = useState(false)
+  const allTicketsSelected = shown.length > 0 && shown.every((ticket) => selectedTicketIds.includes(ticket.id))
+  const visibleSelectedTicketIds = selectedTicketIds.filter((id) => shown.some((ticket) => ticket.id === id))
   const nextAction: Partial<Record<TicketStatus, { label: string; status: TicketStatus }>> = {
     diajukan: { label: 'Mulai verifikasi', status: 'verifikasi_sarpras' },
     verifikasi_sarpras: { label: 'Verifikasi lapangan', status: 'verifikasi_lapangan' },
     verifikasi_lapangan: { label: 'Kirim rekomendasi', status: 'menunggu_kepsek' },
     proses_perbaikan: { label: 'Tandai selesai', status: 'selesai' },
+  }
+
+  function toggleTicketSelection(ticketId: string) {
+    setSelectedTicketIds((current) => current.includes(ticketId)
+      ? current.filter((id) => id !== ticketId)
+      : [...current, ticketId])
+  }
+
+  function toggleAllTicketSelection() {
+    setSelectedTicketIds((current) => allTicketsSelected
+      ? current.filter((id) => !shown.some((ticket) => ticket.id === id))
+      : [...new Set([...current, ...shown.map((ticket) => ticket.id)])])
+  }
+
+  async function deleteSelectedTickets() {
+    if (visibleSelectedTicketIds.length === 0 || deletingTickets) return
+    if (!window.confirm(`Hapus ${visibleSelectedTicketIds.length} laporan kerusakan yang dipilih? Tindakan ini tidak dapat dibatalkan.`)) return
+    setDeletingTickets(true)
+    try {
+      const deleted = await onDeleteTickets(visibleSelectedTicketIds)
+      if (deleted) setSelectedTicketIds((current) => current.filter((id) => !visibleSelectedTicketIds.includes(id)))
+    } finally {
+      setDeletingTickets(false)
+    }
   }
 
   return (
@@ -1848,6 +1989,10 @@ function TicketsView({
         description="Catat kerusakan fasilitas dan ikuti tahap pemeriksaannya sampai selesai."
         action={role === 'guru' ? <button className="button button-primary" onClick={() => onNavigate('new-ticket')}><Plus size={16} />Buat laporan</button> : undefined}
       />
+      {isAdmin && shown.length > 0 && <div className="ticket-bulk-actions">
+        <label className="booking-select-control"><input type="checkbox" checked={allTicketsSelected} onChange={toggleAllTicketSelection} aria-label="Pilih semua laporan kerusakan" /><span>Pilih semua laporan</span></label>
+        <button className="button button-danger" onClick={deleteSelectedTickets} disabled={visibleSelectedTicketIds.length === 0 || deletingTickets}><Trash2 size={15} />{deletingTickets ? 'Menghapus…' : `Hapus terpilih${visibleSelectedTicketIds.length > 0 ? ` (${visibleSelectedTicketIds.length})` : ''}`}</button>
+      </div>}
       {shown.length === 0 ? (
         <EmptyState icon={ClipboardList} title="Belum ada laporan kerusakan" description={role === 'guru' ? 'Buat laporan jika menemukan fasilitas yang perlu diperbaiki.' : 'Laporan yang dikirim Guru atau Wali Kelas akan tampil di sini.'} />
       ) : (
@@ -1861,7 +2006,7 @@ function TicketsView({
             return (
               <article className="panel ticket-card" key={ticket.id}>
                 <div className="ticket-card-main">
-                  <div className="ticket-number-line"><span>{ticket.number}</span><span className={statusClass(ticket.status)}>{TICKET_LABELS[ticket.status]}</span>{ticket.status === 'menunggu_kepsek' && <span className="status status-green">Direkomendasikan Sarana Prasarana</span>}</div>
+                  <div className="ticket-number-line">{isAdmin && <label className="ticket-select-control"><input type="checkbox" checked={selectedTicketIds.includes(ticket.id)} onChange={() => toggleTicketSelection(ticket.id)} aria-label={`Pilih laporan ${ticket.number}`} /><span>Pilih</span></label>}<span>{ticket.number}</span><span className={statusClass(ticket.status)}>{TICKET_LABELS[ticket.status]}</span>{ticket.status === 'menunggu_kepsek' && <span className="status status-green">Direkomendasikan Sarana Prasarana</span>}</div>
                   <h3>{ticket.title}</h3>
                   <p>{ticket.equipment} · Jumlah rusak: {ticket.damagedQuantity ?? '–'} · {ticket.roomName ?? ticket.location}</p>
                   <p className="ticket-description">{ticket.description}</p>
@@ -1965,7 +2110,7 @@ function NewTicketView({
               setDamagedQuantity('1')
             }} required>
               <option value="" disabled>Pilih ruangan</option>
-              {rooms.map((room) => <option value={room.id} key={room.id}>{room.name}</option>)}
+              {rooms.filter((room) => !room.isArchived).map((room) => <option value={room.id} key={room.id}>{room.name}</option>)}
             </select>
           </label>
           <label className="field field-full">
@@ -2281,7 +2426,8 @@ function DatasetView({ role, rooms, inventoryItems, onAddItem, onUpdateQuantity,
   const [addingItem, setAddingItem] = useState(false)
   const isManager = role === 'admin' || role === 'sarpras'
   const visibleRooms = selectedRoom === 'all' ? rooms : rooms.filter((room) => room.id === selectedRoom)
-  const activeNewRoomId = rooms.some((room) => room.id === newRoomId) ? newRoomId : rooms[0]?.id ?? ''
+  const activeRooms = rooms.filter((room) => !room.isArchived)
+  const activeNewRoomId = activeRooms.some((room) => room.id === newRoomId) ? newRoomId : activeRooms[0]?.id ?? ''
 
   async function addItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -2345,10 +2491,11 @@ function DatasetView({ role, rooms, inventoryItems, onAddItem, onUpdateQuantity,
             <span>Ruangan</span>
             <select value={activeNewRoomId} onChange={(event) => setNewRoomId(event.target.value)} required>
               <option value="" disabled>Pilih ruangan</option>
-              {rooms.map((room) => <option value={room.id} key={room.id}>{room.name}</option>)}
+              {activeRooms.map((room) => <option value={room.id} key={room.id}>{room.name}</option>)}
             </select>
           </label>
           <label className="field">
+            <span>Nama barang atau fasilitas</span>
             <span>Nama barang</span>
             <input value={newItemName} onChange={(event) => setNewItemName(event.target.value)} maxLength={120} required />
           </label>
@@ -2559,7 +2706,9 @@ function RoomsView({
   now,
   onToggle,
   onAdd,
+  onUpdateRoom,
   onDelete,
+  onSetArchived,
   onSetOccupancy,
   onClearOccupancy,
 }: {
@@ -2567,28 +2716,56 @@ function RoomsView({
   now: number
   onToggle: (id: string) => void
   onAdd: (event: FormEvent<HTMLFormElement>) => void
+  onUpdateRoom: (id: string, event: FormEvent<HTMLFormElement>) => Promise<boolean>
   onDelete: (id: string) => void
+  onSetArchived: (id: string, isArchived: boolean) => void
   onSetOccupancy: (id: string, event: FormEvent<HTMLFormElement>) => void
   onClearOccupancy: (id: string) => void
 }) {
+  const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
+
+  async function submitRoomEdit(roomId: string, event: FormEvent<HTMLFormElement>) {
+    const saved = await onUpdateRoom(roomId, event)
+    if (saved) setEditingRoomId(null)
+  }
+
   return (
     <div className="page-stack">
-      <PageIntro title="Data ruangan" description="Periksa data ruang yang akan muncul sebagai pilihan booking. Status tentatif perlu dikonfirmasi sebelum dibuka." />
+      <PageIntro title="Data ruangan" description="Edit detail ruangan, arsipkan untuk menyimpan riwayat booking, atau hapus permanen setelah tidak ada laporan terbuka dan booking aktif." />
       <section className="room-admin-grid">
         {rooms.map((room) => <article className="panel room-admin-card" key={room.id}>
-          <div className="room-admin-top"><span className="room-large-icon"><Building2 size={21} /></span><span className={room.status === 'tersedia' ? 'room-status room-status-open' : 'room-status room-status-pending'}>{room.status === 'tersedia' ? 'Tersedia' : 'Tentatif'}</span></div>
-          <h3>{room.name}</h3><p>{room.location}</p>
-          <div className="room-admin-details"><span>Kode</span><strong>{room.code}</strong><span>Kapasitas</span><strong>{room.capacity} orang</strong><span>Fasilitas</span><strong>{room.facilities}</strong></div>
-          {room.occupiedFrom && room.occupiedUntil && new Date(room.occupiedUntil).getTime() > now && <p className="room-occupancy-status">Pemakaian tercatat sampai {formatLocalDateTime(room.occupiedUntil)}.</p>}
-          <form className="room-occupancy-form" onSubmit={(event) => onSetOccupancy(room.id, event)}>
-            <label className="field"><span>Terpakai sampai</span><input name="occupiedUntil" type="datetime-local" min={toLocalDateTime(new Date(now))} defaultValue={room.occupiedUntil ?? ''} required /></label>
-            <button className="button button-quiet button-wide" type="submit"><Clock3 size={15} />Simpan waktu</button>
-          </form>
-          {room.occupiedUntil && <button className="button button-quiet button-wide" onClick={() => onClearOccupancy(room.id)}>Hapus jadwal terpakai</button>}
-          <button className={room.status === 'tersedia' ? 'button button-quiet button-wide' : 'button button-primary button-wide'} onClick={() => onToggle(room.id)}>
-            {room.status === 'tersedia' ? 'Tandai perlu konfirmasi' : 'Konfirmasi tersedia'}
-          </button>
-          <button className="button button-danger button-wide" onClick={() => onDelete(room.id)}><Trash2 size={15} />Hapus ruangan</button>
+          <div className="room-admin-top"><span className="room-large-icon"><Building2 size={21} /></span><span className={room.isArchived ? 'room-status room-status-archived' : room.status === 'tersedia' ? 'room-status room-status-open' : 'room-status room-status-pending'}>{room.isArchived ? 'Diarsipkan' : room.status === 'tersedia' ? 'Tersedia' : 'Tentatif'}</span></div>
+          {editingRoomId === room.id ? (
+            <form className="room-edit-form" onSubmit={(event) => submitRoomEdit(room.id, event)}>
+              <label className="field"><span>Nama ruangan</span><input name="name" defaultValue={room.name} required /></label>
+              <label className="field"><span>Kode ruang</span><input name="code" defaultValue={room.code} required /></label>
+              <label className="field"><span>Lokasi</span><input name="location" defaultValue={room.location} required /></label>
+              <label className="field"><span>Kapasitas</span><input name="capacity" type="number" min="1" step="1" defaultValue={room.capacity} required /></label>
+              <label className="field room-edit-facilities"><span>Fasilitas</span><input name="facilities" defaultValue={room.facilities === 'Belum dicantumkan.' ? '' : room.facilities} placeholder="Contoh: AC, proyektor, papan tulis" /></label>
+              <div className="room-edit-actions">
+                <button className="button button-primary" type="submit">Simpan perubahan</button>
+                <button className="button button-quiet" type="button" onClick={() => setEditingRoomId(null)}>Batal</button>
+              </div>
+            </form>
+          ) : <>
+            <h3>{room.name}</h3><p>{room.location}</p>
+            <div className="room-admin-details"><span>Kode</span><strong>{room.code}</strong><span>Kapasitas</span><strong>{room.capacity} orang</strong><span>Fasilitas</span><strong>{room.facilities}</strong></div>
+            <button className="button button-quiet button-wide" onClick={() => setEditingRoomId(room.id)}>Edit data ruangan</button>
+          </>}
+          {!room.isArchived && <>
+            {room.occupiedFrom && room.occupiedUntil && new Date(room.occupiedUntil).getTime() > now && <p className="room-occupancy-status">Pemakaian tercatat sampai {formatLocalDateTime(room.occupiedUntil)}.</p>}
+            <form className="room-occupancy-form" onSubmit={(event) => onSetOccupancy(room.id, event)}>
+              <label className="field"><span>Terpakai sampai</span><input name="occupiedUntil" type="datetime-local" min={toLocalDateTime(new Date(now))} defaultValue={room.occupiedUntil ?? ''} required /></label>
+              <button className="button button-quiet button-wide" type="submit"><Clock3 size={15} />Simpan waktu</button>
+            </form>
+            {room.occupiedUntil && <button className="button button-quiet button-wide" onClick={() => onClearOccupancy(room.id)}>Hapus jadwal terpakai</button>}
+            <button className={room.status === 'tersedia' ? 'button button-quiet button-wide' : 'button button-primary button-wide'} onClick={() => onToggle(room.id)}>
+              {room.status === 'tersedia' ? 'Tandai perlu konfirmasi' : 'Konfirmasi tersedia'}
+            </button>
+            <button className="button button-quiet button-wide" onClick={() => onSetArchived(room.id, true)}><Archive size={15} />Arsipkan ruangan</button>
+          </>}
+          {room.isArchived && <button className="button button-quiet button-wide" onClick={() => onSetArchived(room.id, false)}><RotateCcw size={15} />Pulihkan ruangan</button>}
+          <button className="button button-danger button-wide" onClick={() => onDelete(room.id)}><Trash2 size={15} />Hapus permanen</button>
         </article>)}
       </section>
       <section className="panel form-panel room-add-panel">
@@ -2597,7 +2774,8 @@ function RoomsView({
           <label className="field"><span>Nama ruangan</span><input name="name" placeholder="Nama sesuai data sekolah" required /></label>
           <label className="field"><span>Kode ruang</span><input name="code" placeholder="Kode ruang" required /></label>
           <label className="field"><span>Lokasi</span><input name="location" placeholder="Gedung dan lantai" required /></label>
-          <label className="field"><span>Kapasitas</span><input name="capacity" type="number" min="1" placeholder="0" required /></label>
+          <label className="field"><span>Kapasitas</span><input name="capacity" type="number" min="1" step="1" placeholder="0" required /></label>
+          <label className="field"><span>Fasilitas</span><input name="facilities" placeholder="Contoh: AC, proyektor, papan tulis" /></label>
           <button className="button button-primary" type="submit"><Plus size={16} />Tambah ruangan</button>
         </form>
       </section>
