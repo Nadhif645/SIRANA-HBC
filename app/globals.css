@@ -191,9 +191,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ticket-card h3 { margin: 10px 0 5px; font-size: 15px; }
 .ticket-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .ticket-card .ticket-description { margin-top: 9px; color: var(--ink-soft); }
-.ticket-requester { width: min(270px, 100%); display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 10px 0; }
-.ticket-requester span { color: var(--muted); font-size: 9px; }
-.ticket-requester strong { color: var(--ink); font-size: 12px; font-weight: 700; overflow-wrap: anywhere; text-align: right; }
+.ticket-card-side { flex: 0 0 270px; display: grid; align-content: start; gap: 14px; }
+.ticket-requester { width: 100%; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.ticket-requester span { color: var(--muted); font-size: 11px; }
+.ticket-requester strong { color: var(--ink); font-size: 14px; font-weight: 700; overflow-wrap: anywhere; text-align: right; }
+.ticket-card-side .ticket-actions { flex-direction: column; align-items: stretch; }
+.ticket-card-side .ticket-actions > * { width: 100%; }
 .ticket-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 11px; color: var(--muted); font-size: 9px; }
 .photo-label { display: inline-flex; align-items: center; gap: 4px; }
 .ticket-actions { flex: 0 0 auto; display: flex; align-items: flex-end; flex-wrap: wrap; gap: 7px; }
@@ -462,6 +465,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 9px; }
   .page-intro { align-items: flex-start; flex-direction: column; }
   .page-intro > .button { width: 100%; }
   .ticket-card { flex-direction: column; padding: 14px; }
+  .ticket-card-side { width: 100%; flex-basis: auto; }
   .ticket-bulk-actions { justify-content: space-between; }
 
   .ticket-rejection-panel { width: 100%; max-width: none; }

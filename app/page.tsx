@@ -2026,7 +2026,7 @@ function TicketsView({
                   <div className="ticket-number-line">{isAdmin && <label className="ticket-select-control"><input type="checkbox" checked={selectedTicketIds.includes(ticket.id)} onChange={() => toggleTicketSelection(ticket.id)} aria-label={`Pilih laporan ${ticket.number}`} /><span>Pilih</span></label>}<span>{ticket.number}</span><span className={statusClass(ticket.status)}>{TICKET_LABELS[ticket.status]}</span>{ticket.status === 'menunggu_kepsek' && <span className="status status-green">Direkomendasikan Sarana Prasarana</span>}</div>
                   <h3>{ticket.title}</h3>
                   <p>{ticket.equipment} · Jumlah rusak: {ticket.damagedQuantity ?? '–'} · {ticket.roomName ?? ticket.location}</p>
-                  <div className="ticket-requester"><span>Pengaju</span><strong>{ticket.requesterName}</strong></div>
+
                   <p className="ticket-description">{ticket.description}</p>
                   <div className="ticket-meta"><span>{ticket.category}</span>{ticket.damageSeverity && <span>Tingkat kerusakan: {DAMAGE_SEVERITY_LABELS[ticket.damageSeverity]}</span>}<span>{formatShortDate(ticket.createdAt)}</span>{ticket.photoName && <span className="photo-label"><ImagePlus size={13} /> Foto terlampir</span>}</div>
                   {(ticket.photoData || ticket.status === 'ditolak') && <div className={`ticket-evidence-row${ticket.photoData ? '' : ' ticket-evidence-row-no-photo'}`}>
@@ -2036,8 +2036,10 @@ function TicketsView({
                   {ticket.sarprasReportPath && <button className="text-button report-link" onClick={() => onReadReport(ticket.sarprasReportPath ?? null, `Laporan Sarpras ${ticket.number}.pdf`)}><FileText size={14} />Baca laporan rekomendasi PDF</button>}
                   <TicketProgress status={ticket.status} rejectionStage={ticket.rejectionStage} />
                 </div>
-                {(canProgress || canReject || canApprove) && (
-                  <div className="ticket-actions">
+                <div className="ticket-card-side">
+                  <div className="ticket-requester"><span>Pengaju</span><strong>{ticket.requesterName}</strong></div>
+                  {(canProgress || canReject || canApprove) && (
+                    <div className="ticket-actions">
                     {canProgress && <>
                       {action.status === 'verifikasi_sarpras' && <label className="severity-select-field">
                         <span>Tingkat kerusakan</span>
@@ -2055,8 +2057,9 @@ function TicketsView({
                       <button className="button button-primary" onClick={() => onUpdate(ticket.id, 'proses_perbaikan')}><Check size={15} />Setujui perbaikan</button>
                       <button className="button button-quiet" onClick={() => onUpdate(ticket.id, 'ditolak')}><X size={15} />Tolak</button>
                     </>}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </article>
             )
           })}
