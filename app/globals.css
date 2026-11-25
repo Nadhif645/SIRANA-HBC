@@ -195,11 +195,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ticket-requester { width: 100%; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .ticket-requester span { color: var(--muted); font-size: 11px; }
 .ticket-requester strong { color: var(--ink); font-size: 14px; font-weight: 700; overflow-wrap: anywhere; text-align: right; }
-.ticket-card-side .ticket-actions { flex-direction: column; align-items: stretch; }
-.ticket-card-side .ticket-actions > * { width: 100%; }
+
 .ticket-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 11px; color: var(--muted); font-size: 9px; }
 .photo-label { display: inline-flex; align-items: center; gap: 4px; }
-.ticket-actions { flex: 0 0 auto; display: flex; align-items: flex-end; flex-wrap: wrap; gap: 7px; }
+
 .ticket-evidence-row { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); align-items: stretch; gap: 16px; margin-top: 16px; }
 .ticket-evidence-row-no-photo { grid-template-columns: minmax(0, 1fr); }
 .ticket-photo-frame { width: 100%; max-width: 380px; min-width: 0; margin: 0; border: 1px solid var(--green); border-radius: 11px; padding: 8px; background: var(--surface-soft); }
@@ -469,8 +468,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 9px; }
   .ticket-bulk-actions { justify-content: space-between; }
 
   .ticket-rejection-panel { width: 100%; max-width: none; }
-  .ticket-actions { width: 100%; flex-direction: row; flex-wrap: wrap; }
-  .ticket-actions .button { flex: 1 1 auto; }
+
   .progress-track { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; }
   .progress-step { flex-direction: row; align-items: center; font-size: 8px; }
   .form-panel, .booking-form-panel, .schedule-panel, .booking-history-panel, .review-section, .dataset-panel { padding: 14px; }

@@ -1631,9 +1631,7 @@ export default function HomePage() {
                   role={role}
                   tickets={currentTickets}
                   onNavigate={changeView}
-                  onUpdate={updateTicket}
                   onDeleteTickets={deleteTickets}
-                  onPrepareReport={prepareTicketRecommendation}
                   onOpenPhoto={openTicketPhoto}
                   onReadReport={readSarprasReport}
                 />
@@ -1946,34 +1944,23 @@ function TicketsView({
   role,
   tickets,
   onNavigate,
-  onUpdate,
   onDeleteTickets,
-  onPrepareReport,
   onOpenPhoto,
   onReadReport,
 }: {
   role: Role
   tickets: Ticket[]
   onNavigate: (view: View) => void
-  onUpdate: (id: string, status: TicketStatus, damageSeverity?: DamageSeverity) => void
   onDeleteTickets: (ids: string[]) => Promise<boolean>
-  onPrepareReport: (ticket: Ticket) => void
   onOpenPhoto: (name: string, url: string) => void
   onReadReport: (path: string | null, name: string) => void
 }) {
   const shown = role === 'guru' ? tickets : tickets
   const isAdmin = role === 'admin'
-  const [severityDrafts, setSeverityDrafts] = useState<Record<string, DamageSeverity | ''>>({})
   const [selectedTicketIds, setSelectedTicketIds] = useState<string[]>([])
   const [deletingTickets, setDeletingTickets] = useState(false)
   const allTicketsSelected = shown.length > 0 && shown.every((ticket) => selectedTicketIds.includes(ticket.id))
   const visibleSelectedTicketIds = selectedTicketIds.filter((id) => shown.some((ticket) => ticket.id === id))
-  const nextAction: Partial<Record<TicketStatus, { label: string; status: TicketStatus }>> = {
-    diajukan: { label: 'Mulai verifikasi', status: 'verifikasi_sarpras' },
-    verifikasi_sarpras: { label: 'Verifikasi lapangan', status: 'verifikasi_lapangan' },
-    verifikasi_lapangan: { label: 'Kirim rekomendasi', status: 'menunggu_kepsek' },
-    proses_perbaikan: { label: 'Tandai selesai', status: 'selesai' },
-  }
 
   function toggleTicketSelection(ticketId: string) {
     setSelectedTicketIds((current) => current.includes(ticketId)
@@ -2015,11 +2002,6 @@ function TicketsView({
       ) : (
         <div className="ticket-list">
           {shown.map((ticket) => {
-            const action = nextAction[ticket.status]
-            const canProgress = role === 'sarpras' && action
-            const canReject = role === 'sarpras' && ['diajukan', 'verifikasi_sarpras', 'verifikasi_lapangan'].includes(ticket.status)
-            const canApprove = role === 'kepsek' && ticket.status === 'menunggu_kepsek'
-            const selectedSeverity = severityDrafts[ticket.id] ?? ticket.damageSeverity ?? ''
             return (
               <article className="panel ticket-card" key={ticket.id}>
                 <div className="ticket-card-main">
@@ -2038,27 +2020,6 @@ function TicketsView({
                 </div>
                 <div className="ticket-card-side">
                   <div className="ticket-requester"><span>Pengaju</span><strong>{ticket.requesterName}</strong></div>
-                  {(canProgress || canReject || canApprove) && (
-                    <div className="ticket-actions">
-                    {canProgress && <>
-                      {action.status === 'verifikasi_sarpras' && <label className="severity-select-field">
-                        <span>Tingkat kerusakan</span>
-                        <select aria-label={`Tingkat kerusakan laporan ${ticket.number}`} value={selectedSeverity} onChange={(event) => setSeverityDrafts((current) => ({ ...current, [ticket.id]: event.target.value as DamageSeverity | '' }))}>
-                          <option value="">Pilih tingkat</option>
-                          <option value="ringan">Ringan</option>
-                          <option value="sedang">Sedang</option>
-                          <option value="berat">Berat</option>
-                        </select>
-                      </label>}
-                      <button className="button button-primary" disabled={action.status === 'verifikasi_sarpras' && !selectedSeverity} onClick={() => action.status === 'menunggu_kepsek' ? onPrepareReport(ticket) : onUpdate(ticket.id, action.status, action.status === 'verifikasi_sarpras' ? selectedSeverity || undefined : undefined)}>{action.label}<ArrowRight size={15} /></button>
-                    </>}
-                    {canReject && <button className="button button-quiet" onClick={() => onUpdate(ticket.id, 'ditolak')}><X size={15} />Tolak</button>}
-                    {canApprove && <>
-                      <button className="button button-primary" onClick={() => onUpdate(ticket.id, 'proses_perbaikan')}><Check size={15} />Setujui perbaikan</button>
-                      <button className="button button-quiet" onClick={() => onUpdate(ticket.id, 'ditolak')}><X size={15} />Tolak</button>
-                    </>}
-                    </div>
-                  )}
                 </div>
               </article>
             )
