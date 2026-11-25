@@ -316,6 +316,16 @@ function statusClass(status: string) {
   return 'status status-teal'
 }
 
+function formatActionError(error: { code?: string; message?: string }, fallback: string) {
+  if (error.code === '23505') return 'Data dengan nilai tersebut sudah digunakan. Gunakan nilai lain.'
+  if (error.code === '23503') return 'Data masih digunakan oleh catatan lain dan tidak dapat dihapus.'
+  if (error.code === '42501') return 'Akun ini tidak memiliki izin untuk melakukan tindakan tersebut.'
+  if (['P0001', '23514'].includes(error.code ?? '') && error.message && !/duplicate key|constraint|violates|permission denied|foreign key|row-level security/i.test(error.message)) {
+    return error.message
+  }
+  return fallback
+}
+
 function dateIsValid(value: string) {
   return Boolean(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime())
 }
@@ -651,6 +661,7 @@ export default function HomePage() {
   }, [openDocument])
 
   const role = data.role
+  const noticeIsError = /gagal|tidak dapat|belum dapat|tidak bisa|sudah dipakai|tidak ditemukan|akses ditolak|hanya admin|harus|wajib|lengkapi|pilih |isi |masukkan|lampirkan|melebihi|bertabrakan|tidak valid|bukan .*valid|maksimal|tidak tersedia|belum berhasil|tidak terhapus/i.test(notice)
   const reviewLabel = role === 'sarpras'
     ? 'Tinjauan Wakasek Sarpras'
     : role === 'kepsek' ? 'Persetujuan Kepala Sekolah' : 'Perlu ditinjau'
@@ -709,11 +720,11 @@ export default function HomePage() {
     if (!supabase) return
     const { error } = await supabase.from('profiles').update({ role, updated_at: new Date().toISOString() }).eq('id', accountId)
     if (error) {
-      announce(`Peran akun gagal diperbarui: ${error.message}`)
+      announce(formatActionError(error, 'Perubahan peran akun gagal disimpan. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, accounts: previous.accounts.map((account) => account.id === accountId ? { ...account, role } : account) }))
-    announce('Peran akun diperbarui di Supabase.')
+    announce('Peran akun berhasil diperbarui.')
   }
 
   async function setAccountApproval(accountId: string, approvalStatus: AccountApprovalStatus) {
@@ -725,7 +736,7 @@ export default function HomePage() {
       : { approval_status: approvalStatus, is_active: false, updated_at: new Date().toISOString() }
     const { error } = await supabase.from('profiles').update(values).eq('id', accountId)
     if (error) {
-      announce(`Persetujuan akun gagal disimpan: ${error.message}`)
+      announce(formatActionError(error, 'Persetujuan akun gagal disimpan. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, accounts: previous.accounts.map((item) => item.id === accountId ? { ...item, role: approvalStatus === 'approved' ? item.requestedRole : item.role, approvalStatus, isActive: approvalStatus === 'approved' } : item) }))
@@ -739,11 +750,11 @@ export default function HomePage() {
     const isActive = !account.isActive
     const { error } = await supabase.from('profiles').update({ is_active: isActive, updated_at: new Date().toISOString() }).eq('id', accountId)
     if (error) {
-      announce(`Status akun gagal diperbarui: ${error.message}`)
+      announce(formatActionError(error, 'Status aktif akun gagal diperbarui. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, accounts: previous.accounts.map((item) => item.id === accountId ? { ...item, isActive } : item) }))
-    announce('Status aktif akun diperbarui di Supabase.')
+    announce('Status akun berhasil diperbarui.')
   }
 
   async function requestAccountDeletion(accountId: string): Promise<string | null> {
@@ -776,7 +787,7 @@ export default function HomePage() {
 
     const error = await requestAccountDeletion(accountId)
     if (error) {
-      announce(`Pendaftaran tidak ditolak karena akun gagal dihapus: ${error}`)
+      announce('Pendaftaran belum dapat ditolak karena akun gagal dihapus. Coba lagi atau hubungi Admin jika masalah berlanjut.')
       return
     }
     setData((previous) => ({ ...previous, accounts: previous.accounts.filter((item) => item.id !== accountId) }))
@@ -795,7 +806,7 @@ export default function HomePage() {
 
     const error = await requestAccountDeletion(accountId)
     if (error) {
-      announce(`Akun gagal dihapus: ${error}`)
+      announce('Akun gagal dihapus. Coba lagi atau hubungi Admin jika masalah berlanjut.')
       return
     }
 
@@ -810,7 +821,7 @@ export default function HomePage() {
       .select('*')
       .single()
     if (error || !saved) {
-      announce(`Barang gagal ditambahkan: ${error?.message ?? 'ruangan tidak ditemukan'}`)
+      announce(error ? formatActionError(error, 'Barang gagal ditambahkan. Periksa nama barang dan ruangan.') : 'Ruangan tidak ditemukan. Muat ulang daftar ruangan lalu coba lagi.')
       return false
     }
     setInventoryItems((previous) => [...previous, {
@@ -834,13 +845,13 @@ export default function HomePage() {
       .select('*')
       .maybeSingle()
     if (error || !updated) {
-      announce(`Jumlah barang gagal diperbarui: ${error?.message ?? 'data tidak ditemukan'}`)
+      announce(error ? formatActionError(error, 'Jumlah barang gagal diperbarui. Coba lagi.') : 'Barang tidak ditemukan. Muat ulang dataset lalu coba lagi.')
       return false
     }
     setInventoryItems((previous) => previous.map((item) => item.id === itemId ? {
       ...item, quantity: updated.quantity, activeDamagedQuantity: updated.active_damaged_quantity,
     } : item))
-    announce('Jumlah barang diperbarui di Supabase.')
+    announce('Jumlah barang berhasil diperbarui.')
     return true
   }
 
@@ -852,7 +863,7 @@ export default function HomePage() {
       .select('id')
       .maybeSingle()
     if (error || !archived) {
-      announce(`Barang gagal dihapus dari dataset: ${error?.message ?? 'data tidak ditemukan atau masih memiliki laporan kerusakan aktif'}`)
+      announce(error ? formatActionError(error, 'Barang tidak dapat dihapus. Pastikan tidak ada laporan kerusakan yang masih aktif.') : 'Barang tidak ditemukan atau masih memiliki laporan kerusakan aktif.')
       return false
     }
     setInventoryItems((previous) => previous.filter((item) => item.id !== itemId))
@@ -894,7 +905,7 @@ export default function HomePage() {
       photoPath = `${authUser.id}/${ticketId}.${extension}`
       const upload = await supabase.storage.from('damage-photos').upload(photoPath, photo.file, { upsert: false })
       if (upload.error) {
-        announce(`Foto gagal diunggah. Jalankan migration penyimpanan foto: ${upload.error.message}`)
+        announce(formatActionError(upload.error, 'Foto gagal diunggah. Coba pilih foto lain atau hubungi Admin jika masalah berlanjut.'))
         return
       }
     }
@@ -904,7 +915,7 @@ export default function HomePage() {
     }).select('*').single()
     if (error) {
       if (photoPath) await supabase.storage.from('damage-photos').remove([photoPath])
-      announce(`Laporan gagal disimpan: ${error.message}`)
+      announce(formatActionError(error, 'Laporan kerusakan gagal disimpan. Periksa isian lalu coba lagi.'))
       return
     }
     let photoUrl: string | null = null
@@ -928,7 +939,7 @@ export default function HomePage() {
     formElement.reset()
     setPhoto(null)
     setView('tickets')
-    announce('Laporan tersimpan di Supabase dan dikirim ke Wakasek Sarpras.')
+    announce('Laporan berhasil disimpan dan dikirim ke Wakasek Sarpras.')
   }
 
   async function updateTicket(ticketId: string, status: TicketStatus, damageSeverity?: DamageSeverity) {
@@ -962,7 +973,7 @@ export default function HomePage() {
     if (status === 'selesai') values.completed_at = new Date().toISOString()
     const { data: updated, error } = await supabase.from('damage_tickets').update(values).eq('id', ticketId).select('id').maybeSingle()
     if (error || !updated) {
-      announce(`Status laporan gagal diperbarui: ${error?.message ?? 'laporan tidak ditemukan atau akses berubah'}`)
+      announce(error ? formatActionError(error, 'Status laporan gagal diperbarui. Muat ulang halaman lalu coba lagi.') : 'Laporan tidak ditemukan. Muat ulang daftar lalu coba lagi.')
       return
     }
     setData((previous) => ({ ...previous, tickets: previous.tickets.map((ticket) => ticket.id === ticketId ? {
@@ -1039,7 +1050,7 @@ export default function HomePage() {
     })
     if (upload.error) {
       setBookingSubmitting(false)
-      announce(`Surat PDF gagal diunggah ke Supabase: ${upload.error.message}`)
+      announce(formatActionError(upload.error, 'Surat PDF gagal diunggah. Coba pilih file lagi atau hubungi Admin jika masalah berlanjut.'))
       return
     }
     const { data: saved, error } = await supabase.from('room_bookings').insert({
@@ -1049,7 +1060,7 @@ export default function HomePage() {
     if (error) {
       await supabase.storage.from('booking-letters').remove([letterPath])
       setBookingSubmitting(false)
-      announce(`Booking gagal disimpan: ${error.message}`)
+      announce(formatActionError(error, 'Pengajuan booking gagal disimpan. Periksa isian lalu coba lagi.'))
       return
     }
     setBookingSubmitting(false)
@@ -1068,18 +1079,18 @@ export default function HomePage() {
     setBookingEnd('10:00')
     setBookingCapacity('1')
     setBookingLetter(null)
-    announce('Booking dan surat tersimpan di Supabase untuk ditinjau Sarpras.')
+    announce('Pengajuan booking dan surat berhasil dikirim ke Sarpras untuk ditinjau.')
   }
 
   async function readStoredPdf(bucket: 'booking-letters' | 'sarpras-reports', path: string | null, name: string) {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (!supabase || !path) {
-      announce('Path file PDF tidak tersedia di Supabase.')
+      announce('File PDF tidak tersedia.')
       return
     }
     const { data: file, error } = await supabase.storage.from(bucket).download(path)
     if (error || !file) {
-      announce(`PDF tidak dapat dibuka: ${error?.message ?? 'file tidak ditemukan'}`)
+      announce(error ? formatActionError(error, 'File PDF gagal dibuka. Coba lagi atau hubungi pengirim file.') : 'File PDF tidak ditemukan.')
       return
     }
     setOpenDocument({ name, url: URL.createObjectURL(file) })
@@ -1141,7 +1152,7 @@ export default function HomePage() {
     })
     if (upload.error) {
       setRecommendationSubmitting(false)
-      announce(`Laporan rekomendasi PDF gagal disimpan: ${upload.error.message}`)
+      announce(formatActionError(upload.error, 'PDF rekomendasi gagal diunggah. Coba pilih file lagi.'))
       return
     }
 
@@ -1156,7 +1167,7 @@ export default function HomePage() {
     if (error || !updated) {
       await supabase.storage.from('sarpras-reports').remove([path])
       setRecommendationSubmitting(false)
-      announce(`Rekomendasi gagal diteruskan: ${error?.message ?? 'permintaan tidak ditemukan atau akses berubah'}`)
+      announce(error ? formatActionError(error, 'Rekomendasi gagal diteruskan. Muat ulang daftar lalu coba lagi.') : 'Permintaan tidak ditemukan. Muat ulang daftar lalu coba lagi.')
       return
     }
 
@@ -1194,7 +1205,7 @@ export default function HomePage() {
     }
     const { data: deletedRows, error } = await supabase.from('damage_tickets').delete().in('id', ticketIds).select('id')
     if (error || !deletedRows || deletedRows.length !== ticketIds.length) {
-      announce(`Laporan kerusakan gagal dihapus: ${error?.message ?? 'akses ditolak atau data sudah berubah'}`)
+      announce(error ? formatActionError(error, 'Laporan kerusakan gagal dihapus. Muat ulang daftar lalu coba lagi.') : 'Laporan tidak terhapus. Muat ulang daftar lalu coba lagi.')
       return false
     }
 
@@ -1218,7 +1229,7 @@ export default function HomePage() {
     })))
 
     if (cleanupErrors.length > 0) {
-      announce(`${deletedRows.length} laporan dihapus, tetapi sebagian foto, PDF, atau dataset belum berhasil diperbarui: ${cleanupErrors.join('; ')}`)
+      announce(`${deletedRows.length} laporan dihapus, tetapi sebagian foto atau PDF gagal dihapus, atau dataset gagal diperbarui. Coba muat ulang halaman.`)
     } else {
       announce(`${deletedRows.length} laporan kerusakan berhasil dihapus.`)
     }
@@ -1237,7 +1248,7 @@ export default function HomePage() {
     }
     const { data: deletedRows, error } = await supabase.from('room_bookings').delete().in('id', bookingIds).select('id')
     if (error || !deletedRows || deletedRows.length !== bookingIds.length) {
-      announce(`Riwayat booking gagal dihapus: ${error?.message ?? 'akses ditolak atau data sudah berubah'}`)
+      announce(error ? formatActionError(error, 'Riwayat booking gagal dihapus. Muat ulang daftar lalu coba lagi.') : 'Booking tidak terhapus. Muat ulang daftar lalu coba lagi.')
       return false
     }
     setData((previous) => ({ ...previous, bookings: previous.bookings.filter((booking) => !bookingIds.includes(booking.id)) }))
@@ -1253,7 +1264,7 @@ export default function HomePage() {
       if (cleanupError) cleanupErrors.push(cleanupError.message)
     }
     if (cleanupErrors.length > 0) {
-      announce(`${deletedRows.length} booking dihapus, tetapi PDF terkait belum seluruhnya terhapus: ${cleanupErrors.join('; ')}`)
+      announce(`${deletedRows.length} booking dihapus, tetapi sebagian PDF gagal dihapus. Coba muat ulang halaman.`)
     } else {
       announce(`${deletedRows.length} riwayat booking berhasil dihapus.`)
     }
@@ -1281,14 +1292,14 @@ export default function HomePage() {
     if (profile.role === 'kepsek') values.decided_by = profile.id
     const { data: updated, error } = await supabase.from('room_bookings').update(values).eq('id', bookingId).select('id').maybeSingle()
     if (error || !updated) {
-      announce(`Status booking gagal diperbarui: ${error?.message ?? 'booking tidak ditemukan atau akses berubah'}`)
+      announce(error ? formatActionError(error, 'Status booking gagal diperbarui. Muat ulang daftar lalu coba lagi.') : 'Booking tidak ditemukan. Muat ulang daftar lalu coba lagi.')
       return
     }
     setData((previous) => ({ ...previous, bookings: previous.bookings.map((booking) => booking.id === bookingId ? {
       ...booking, status, rejectionNote: note ?? booking.rejectionNote,
       rejectionStage: note ? currentBooking.status : booking.rejectionStage,
     } : booking) }))
-    announce(`Status booking tersimpan di Supabase: ${BOOKING_LABELS[status]}.`)
+    announce(`Status booking berhasil diperbarui: ${BOOKING_LABELS[status]}.`)
   }
 
   async function toggleRoom(roomId: string) {
@@ -1298,11 +1309,11 @@ export default function HomePage() {
     const status = room.status === 'tersedia' ? 'tentatif' : 'tersedia'
     const { error } = await supabase.from('rooms').update({ status, updated_at: new Date().toISOString() }).eq('id', roomId)
     if (error) {
-      announce(`Status ruangan gagal disimpan: ${error.message}`)
+      announce(formatActionError(error, 'Status ruangan gagal disimpan. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, rooms: previous.rooms.map((item) => item.id === roomId ? { ...item, status } : item) }))
-    announce('Status ruangan diperbarui di Supabase.')
+    announce('Status ruangan berhasil diperbarui.')
   }
 
   async function setRoomOccupancy(roomId: string, event: FormEvent<HTMLFormElement>) {
@@ -1333,22 +1344,22 @@ export default function HomePage() {
     if (!supabase) return
     const { error } = await supabase.from('rooms').update({ occupied_from: occupiedFrom, occupied_until: occupiedUntil, updated_at: new Date().toISOString() }).eq('id', roomId)
     if (error) {
-      announce(`Waktu pemakaian gagal disimpan: ${error.message}`)
+      announce(formatActionError(error, 'Waktu pemakaian gagal disimpan. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, rooms: previous.rooms.map((room) => room.id === roomId ? { ...room, occupiedFrom, occupiedUntil } : room) }))
-    announce(`Waktu pemakaian sampai ${formatLocalDateTime(occupiedUntil)} tersimpan di Supabase.`)
+    announce(`Waktu pemakaian sampai ${formatLocalDateTime(occupiedUntil)} berhasil disimpan.`)
   }
 
   async function clearRoomOccupancy(roomId: string) {
     if (!supabase) return
     const { error } = await supabase.from('rooms').update({ occupied_from: null, occupied_until: null, updated_at: new Date().toISOString() }).eq('id', roomId)
     if (error) {
-      announce(`Jadwal pemakaian gagal dihapus: ${error.message}`)
+      announce(formatActionError(error, 'Jadwal pemakaian gagal dihapus. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, rooms: previous.rooms.map((room) => room.id === roomId ? { ...room, occupiedFrom: null, occupiedUntil: null } : room) }))
-    announce('Jadwal pemakaian ruangan dihapus dari Supabase.')
+    announce('Jadwal pemakaian ruangan berhasil dihapus.')
   }
 
   async function setRoomArchived(roomId: string, isArchived: boolean) {
@@ -1357,7 +1368,7 @@ export default function HomePage() {
     if (!room) return
     const { error } = await supabase.from('rooms').update({ is_archived: isArchived, updated_at: new Date().toISOString() }).eq('id', roomId)
     if (error) {
-      announce(`Status arsip ruangan gagal diperbarui: ${error.message}`)
+      announce(formatActionError(error, 'Status arsip ruangan gagal diperbarui. Coba lagi.'))
       return
     }
     setData((previous) => ({ ...previous, rooms: previous.rooms.map((item) => item.id === roomId ? { ...item, isArchived } : item) }))
@@ -1375,7 +1386,7 @@ export default function HomePage() {
 
     const { error } = await supabase.from('rooms').delete().eq('id', roomId)
     if (error) {
-      announce(`Ruangan ${room.name} tidak dapat dihapus permanen: ${error.message}`)
+      announce(`Ruangan ${room.name} tidak dapat dihapus permanen. ${formatActionError(error, 'Coba lagi. Jika tetap gagal, pastikan tidak ada laporan terbuka atau booking aktif.')}`)
       return
     }
 
@@ -1416,7 +1427,9 @@ export default function HomePage() {
       name, code, location, capacity, facilities: facilities || null, updated_at: new Date().toISOString(),
     }).eq('id', roomId).select('*').single()
     if (error) {
-      announce(`Perubahan data ruangan gagal disimpan: ${error.message}`)
+      announce(error.code === '23505'
+        ? 'Kode ruangan sudah dipakai. Gunakan kode yang berbeda.'
+        : formatActionError(error, 'Perubahan data ruangan gagal disimpan. Periksa kembali data lalu coba lagi.'))
       return false
     }
     setData((previous) => ({ ...previous, rooms: previous.rooms.map((room) => room.id === roomId ? {
@@ -1442,7 +1455,9 @@ export default function HomePage() {
     if (!supabase) return
     const { data: saved, error } = await supabase.from('rooms').insert({ code, name, location, capacity, status: 'tentatif', facilities: facilities || null }).select('*').single()
     if (error) {
-      announce(`Ruangan gagal ditambahkan: ${error.message}`)
+      announce(error.code === '23505'
+        ? 'Kode ruangan sudah dipakai. Gunakan kode yang berbeda.'
+        : formatActionError(error, 'Ruangan gagal ditambahkan. Periksa kembali data lalu coba lagi.'))
       return
     }
     const room: Room = {
@@ -1451,7 +1466,7 @@ export default function HomePage() {
     }
     setData((previous) => ({ ...previous, rooms: [...previous.rooms, room] }))
     event.currentTarget.reset()
-    announce('Ruangan ditambahkan di Supabase dengan status tentatif.')
+    announce('Ruangan berhasil ditambahkan dengan status tentatif.')
   }
 
   function handleBookingLetter(event: ChangeEvent<HTMLInputElement>) {
@@ -1751,7 +1766,9 @@ export default function HomePage() {
           </form>
         </section>
       </div>}
-      {notice && <div className="toast" role="status"><Check size={17} />{notice}</div>}
+      {notice && <div className={`toast${noticeIsError ? ' toast-error' : ''}`} role={noticeIsError ? 'alert' : 'status'}>
+        {noticeIsError ? <X size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}{notice}
+      </div>}
     </div>
   )
 }
@@ -2009,8 +2026,9 @@ function TicketsView({
                   <div className="ticket-number-line">{isAdmin && <label className="ticket-select-control"><input type="checkbox" checked={selectedTicketIds.includes(ticket.id)} onChange={() => toggleTicketSelection(ticket.id)} aria-label={`Pilih laporan ${ticket.number}`} /><span>Pilih</span></label>}<span>{ticket.number}</span><span className={statusClass(ticket.status)}>{TICKET_LABELS[ticket.status]}</span>{ticket.status === 'menunggu_kepsek' && <span className="status status-green">Direkomendasikan Sarana Prasarana</span>}</div>
                   <h3>{ticket.title}</h3>
                   <p>{ticket.equipment} · Jumlah rusak: {ticket.damagedQuantity ?? '–'} · {ticket.roomName ?? ticket.location}</p>
+                  <div className="ticket-requester"><span>Pengaju</span><strong>{ticket.requesterName}</strong></div>
                   <p className="ticket-description">{ticket.description}</p>
-                  <div className="ticket-meta"><span>Pengaju: {ticket.requesterName}</span><span>{ticket.category}</span>{ticket.damageSeverity && <span>Tingkat kerusakan: {DAMAGE_SEVERITY_LABELS[ticket.damageSeverity]}</span>}<span>{formatShortDate(ticket.createdAt)}</span>{ticket.photoName && <span className="photo-label"><ImagePlus size={13} /> Foto terlampir</span>}</div>
+                  <div className="ticket-meta"><span>{ticket.category}</span>{ticket.damageSeverity && <span>Tingkat kerusakan: {DAMAGE_SEVERITY_LABELS[ticket.damageSeverity]}</span>}<span>{formatShortDate(ticket.createdAt)}</span>{ticket.photoName && <span className="photo-label"><ImagePlus size={13} /> Foto terlampir</span>}</div>
                   {(ticket.photoData || ticket.status === 'ditolak') && <div className={`ticket-evidence-row${ticket.photoData ? '' : ' ticket-evidence-row-no-photo'}`}>
                     {ticket.photoData && <figure className="ticket-photo-frame"><button className="ticket-photo-button" onClick={() => onOpenPhoto(ticket.equipment, ticket.photoData!)} aria-label={`Buka foto kerusakan ${ticket.equipment} dalam ukuran penuh`}><Image className="ticket-photo" src={ticket.photoData} alt={`Dokumentasi ${ticket.equipment}`} width={480} height={320} unoptimized /></button><figcaption className="ticket-photo-caption"><ImagePlus size={14} aria-hidden="true" />Foto bukti kerusakan <span>· Pilih untuk melihat ukuran penuh</span></figcaption></figure>}
                     {ticket.status === 'ditolak' && <div className="ticket-rejection-panel"><span className="ticket-rejection-label">Alasan penolakan</span><strong>Ditolak pada tahap {TICKET_LABELS[ticket.rejectionStage && ticket.rejectionStage !== 'ditolak' ? ticket.rejectionStage : 'menunggu_kepsek']}.</strong><p>{ticket.rejectionNote || 'Alasan belum dicatat.'}</p></div>}
