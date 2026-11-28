@@ -226,13 +226,75 @@ function escapeReportHtml(value: string) {
   })[character] ?? character)
 }
 
-function downloadReportCsv(filename: string, columns: string[], rows: string[][]) {
-  const escapeCell = (value: string) => {
-    const safeValue = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
-    return `"${safeValue.replace(/"/g, '""')}"`
+type ReportGroup = { title: string; rows: string[][] }
+
+function escapeXlsxXml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  })[character] ?? character)
+}
+
+function xlsxColumnName(index: number) {
+  let name = ''
+  for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) {
+    name = String.fromCharCode(65 + ((value - 1) % 26)) + name
   }
-  const content = [columns, ...rows].map((row) => row.map(escapeCell).join(',')).join('\r\n')
-  const blob = new Blob([`\uFEFF${content}`], { type: 'text/csv;charset=utf-8' })
+  return name
+}
+
+async function downloadReportXlsx(filename: string, title: string, columns: string[], rows: string[][], groups?: ReportGroup[]) {
+  const { strToU8, zipSync } = await import('fflate')
+  const lastColumn = xlsxColumnName(columns.length - 1)
+  const reportGroups = groups?.length ? groups : []
+  const groupedTables = Boolean(reportGroups.length)
+  const exportTime = new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeStyle: 'short' }).format(new Date())
+  const columnWidths = columns.map((header, index) => {
+    const longest = Math.max(header.length, ...rows.map((row) => row[index]?.length ?? 0))
+    return `<col min="${index + 1}" max="${index + 1}" width="${Math.min(42, Math.max(12, longest + 2))}" customWidth="1"/>`
+  }).join('')
+  const makeCell = (reference: string, value: string, style: number) =>
+    `<c r="${reference}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${escapeXlsxXml(value)}</t></is></c>`
+  let currentRow = 4
+  const groupTableXml = reportGroups.map((group) => {
+    const sectionTitleRow = currentRow
+    const sectionTitle = `<row r="${currentRow}" ht="24" customHeight="1">${makeCell(`A${currentRow}`, group.title, 4)}</row>`
+    currentRow += 1
+    const headerCells = columns.map((value, index) => makeCell(`${xlsxColumnName(index)}${currentRow}`, value, 1)).join('')
+    const headerRow = `<row r="${currentRow}" ht="24" customHeight="1">${headerCells}</row>`
+    currentRow += 1
+    const dataRows = group.rows.map((values, rowIndex) => {
+      const style = rowIndex % 2 === 0 ? 2 : 3
+      const cells = columns.map((_column, columnIndex) => makeCell(`${xlsxColumnName(columnIndex)}${currentRow}`, values[columnIndex] ?? '', style)).join('')
+      return `<row r="${currentRow++}">${cells}</row>`
+    }).join('')
+    const blankRow = `<row r="${currentRow}" ht="8" customHeight="1"/>`
+    currentRow += 1
+    return { xml: `${sectionTitle}${headerRow}${dataRows}${blankRow}`, mergeRef: `A${sectionTitleRow}:${lastColumn}${sectionTitleRow}` }
+  })
+  const lastRow = groupedTables ? currentRow - 1 : rows.length + 4
+  const titleXml = makeCell('A1', title, 4)
+  const subtitleXml = makeCell('A2', `Diekspor dari SIRANA HBC pada ${exportTime}`, 5)
+  const sectionMerges = groupedTables ? groupTableXml.map((group) => `<mergeCell ref="${group.mergeRef}"/>`).join('') : ''
+  const sheetBody = groupedTables
+    ? groupTableXml.map((group) => group.xml).join('')
+    : `<row r="4" ht="24" customHeight="1">${columns.map((value, index) => makeCell(`${xlsxColumnName(index)}4`, value, 1)).join('')}</row>${rows.map((values, rowIndex) => {
+      const rowNumber = rowIndex + 5
+      const style = rowIndex % 2 === 0 ? 2 : 3
+      const cells = columns.map((_column, columnIndex) => makeCell(`${xlsxColumnName(columnIndex)}${rowNumber}`, values[columnIndex] ?? '', style)).join('')
+      return `<row r="${rowNumber}">${cells}</row>`
+    }).join('')}`
+  const filterXml = groupedTables ? '' : `<autoFilter ref="A4:${lastColumn}${lastRow}"/>`
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1:${lastColumn}${lastRow}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/><cols>${columnWidths}</cols><sheetData><row r="1" ht="30" customHeight="1">${titleXml}</row><row r="2" ht="22" customHeight="1">${subtitleXml}</row><row r="3" ht="8" customHeight="1"/>${sheetBody}</sheetData>${filterXml}<mergeCells count="${2 + (groupedTables ? groupTableXml.length : 0)}"><mergeCell ref="A1:${lastColumn}1"/><mergeCell ref="A2:${lastColumn}2"/>${sectionMerges}</mergeCells><pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="4"><font><sz val="11"/><name val="Aptos"/></font><font><b/><sz val="10"/><color rgb="FF19352E"/><name val="Aptos"/></font><font><b/><sz val="16"/><color rgb="FFFFFFFF"/><name val="Aptos Display"/></font><font><sz val="10"/><color rgb="FF52645E"/><name val="Aptos"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF07513D"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE3F3EA"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF7FBF8"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFE8EFEB"/></left><right style="thin"><color rgb="FFE8EFEB"/></right><top style="thin"><color rgb="FFE8EFEB"/></top><bottom style="thin"><color rgb="FFD5E2DA"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="4" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`
+  const packageFiles: Record<string, Uint8Array> = {
+    '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'),
+    '_rels/.rels': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
+    'xl/workbook.xml': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Laporan" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+    'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+    'xl/styles.xml': strToU8(stylesXml),
+    'xl/worksheets/sheet1.xml': strToU8(sheetXml),
+  }
+  const blob = new Blob([zipSync(packageFiles)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -241,26 +303,46 @@ function downloadReportCsv(filename: string, columns: string[], rows: string[][]
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-function printReport(title: string, columns: string[], rows: string[][]) {
+function printReport(title: string, columns: string[], rows: string[][], groups?: ReportGroup[]) {
   const printWindow = window.open('', '_blank')
   if (!printWindow) {
     window.alert('Izinkan pop-up untuk membuka laporan dan menyimpannya sebagai PDF.')
     return
   }
-  const tableRows = rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeReportHtml(cell)}</td>`).join('')}</tr>`).join('')
-  printWindow.document.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeReportHtml(title)}</title><style>body{font:12px Arial,sans-serif;color:#19352e;margin:28px}h1{font-size:20px;margin:0 0 6px}p{color:#52645e;margin:0 0 18px}table{border-collapse:collapse;width:100%;font-size:10px}th,td{border:1px solid #ccd8d3;padding:7px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#e9f5ef}tr{break-inside:avoid}@page{size:landscape;margin:12mm}</style></head><body><h1>${escapeReportHtml(title)}</h1><p>Diekspor dari SIRANA HBC pada ${escapeReportHtml(new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeStyle: 'short' }).format(new Date()))}</p><table><thead><tr>${columns.map((column) => `<th>${escapeReportHtml(column)}</th>`).join('')}</tr></thead><tbody>${tableRows}</tbody></table><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250))</script></body></html>`)
+  const renderTable = (tableRows: string[][]) => tableRows.length === 0
+    ? '<p class="empty">Belum ada barang pada ruangan ini.</p>'
+    : `<table><thead><tr>${columns.map((column) => `<th>${escapeReportHtml(column)}</th>`).join('')}</tr></thead><tbody>${tableRows.map((row) => `<tr>${row.map((cell) => `<td>${escapeReportHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+  const reportBody = groups?.length
+    ? groups.map((group) => `<section><h2>${escapeReportHtml(group.title)}</h2>${renderTable(group.rows)}</section>`).join('')
+    : renderTable(rows)
+  printWindow.document.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeReportHtml(title)}</title><style>body{font:12px Arial,sans-serif;color:#19352e;margin:28px}h1{font-size:20px;margin:0 0 6px}h2{font-size:14px;margin:22px 0 8px;break-after:avoid}p{color:#52645e;margin:0 0 18px}.empty{margin:8px 0 16px}table{border-collapse:collapse;width:100%;font-size:10px;margin-bottom:18px}th,td{border:1px solid #ccd8d3;padding:7px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#e9f5ef}tr{break-inside:avoid}section{break-inside:avoid-page}@page{size:landscape;margin:12mm}</style></head><body><h1>${escapeReportHtml(title)}</h1><p>Diekspor dari SIRANA HBC pada ${escapeReportHtml(new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeStyle: 'short' }).format(new Date()))}</p>${reportBody}<script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250))</script></body></html>`)
   printWindow.document.close()
 }
 
-function ReportExportActions({ title, filename, columns, rows }: {
+function ReportExportActions({ title, filename, columns, rows, groups }: {
   title: string
   filename: string
   columns: string[]
   rows: string[][]
+  groups?: ReportGroup[]
 }) {
+  const [exporting, setExporting] = useState(false)
+
+  async function exportExcel() {
+    if (exporting) return
+    setExporting(true)
+    try {
+      await downloadReportXlsx(filename, title, columns, rows, groups)
+    } catch {
+      window.alert('File Excel gagal dibuat. Coba lagi atau muat ulang halaman.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return <div className="report-export-actions" aria-label={`Unduh ${title}`}>
-    <button className="button button-quiet" type="button" disabled={rows.length === 0} onClick={() => printReport(title, columns, rows)}><FileDown size={15} />PDF</button>
-    <button className="button button-quiet" type="button" disabled={rows.length === 0} onClick={() => downloadReportCsv(filename, columns, rows)}><FileSpreadsheet size={15} />Excel (CSV)</button>
+    <button className="button button-quiet" type="button" disabled={rows.length === 0} onClick={() => printReport(title, columns, rows, groups)}><FileDown size={15} />PDF</button>
+    <button className="button button-quiet" type="button" disabled={rows.length === 0 || exporting} onClick={exportExcel}><FileSpreadsheet size={15} />{exporting ? 'Menyiapkan…' : 'Excel'}</button>
   </div>
 }
 
@@ -2050,7 +2132,7 @@ function TicketsView({
       <PageIntro
         title="Laporan kerusakan"
         description="Catat kerusakan fasilitas dan ikuti tahap pemeriksaannya sampai selesai."
-        action={<div className="page-intro-actions"><ReportExportActions title="Laporan kerusakan" filename={`laporan-kerusakan-${todayLocal()}.csv`} columns={exportColumns} rows={exportRows} />{role === 'guru' && <button className="button button-primary" onClick={() => onNavigate('new-ticket')}><Plus size={16} />Buat laporan</button>}</div>}
+        action={<div className="page-intro-actions"><ReportExportActions title="Laporan kerusakan" filename={`laporan-kerusakan-${todayLocal()}.xlsx`} columns={exportColumns} rows={exportRows} />{role === 'guru' && <button className="button button-primary" onClick={() => onNavigate('new-ticket')}><Plus size={16} />Buat laporan</button>}</div>}
       />
       {isAdmin && shown.length > 0 && <div className="ticket-bulk-actions">
         <label className="booking-select-control"><input type="checkbox" checked={allTicketsSelected} onChange={toggleAllTicketSelection} aria-label="Pilih semua laporan kerusakan" /><span>Pilih semua laporan</span></label>
@@ -2424,7 +2506,7 @@ function BookingView({
       </div>
 
       <section className="panel booking-history-panel">
-        <div className="panel-heading"><div><h3>{canRequest ? 'Pengajuan saya' : 'Daftar pengajuan booking'}</h3><p>Status rekomendasi, persetujuan, dan dokumen booking</p></div><div className="booking-history-actions"><ReportExportActions title="Booking ruangan" filename={`booking-ruangan-${todayLocal()}.csv`} columns={exportColumns} rows={exportRows} />{isAdmin && userBookings.length > 0 && <button className="button button-danger" onClick={deleteSelectedBookings} disabled={visibleSelectedBookingIds.length === 0 || deletingBookings}><Trash2 size={15} />{deletingBookings ? 'Menghapus…' : `Hapus terpilih${visibleSelectedBookingIds.length > 0 ? ` (${visibleSelectedBookingIds.length})` : ''}`}</button>}</div></div>
+        <div className="panel-heading"><div><h3>{canRequest ? 'Pengajuan saya' : 'Daftar pengajuan booking'}</h3><p>Status rekomendasi, persetujuan, dan dokumen booking</p></div><div className="booking-history-actions"><ReportExportActions title="Booking ruangan" filename={`booking-ruangan-${todayLocal()}.xlsx`} columns={exportColumns} rows={exportRows} />{isAdmin && userBookings.length > 0 && <button className="button button-danger" onClick={deleteSelectedBookings} disabled={visibleSelectedBookingIds.length === 0 || deletingBookings}><Trash2 size={15} />{deletingBookings ? 'Menghapus…' : `Hapus terpilih${visibleSelectedBookingIds.length > 0 ? ` (${visibleSelectedBookingIds.length})` : ''}`}</button>}</div></div>
         {userBookings.length === 0 ? (
           <EmptyState icon={CalendarDays} title="Belum ada pengajuan booking" description="Permintaan booking akan muncul setelah diajukan." />
         ) : (
@@ -2475,6 +2557,18 @@ function DatasetView({ role, rooms, inventoryItems, onAddItem, onUpdateQuantity,
   const [addingItem, setAddingItem] = useState(false)
   const isManager = role === 'admin' || role === 'sarpras'
   const visibleRooms = selectedRoom === 'all' ? rooms : rooms.filter((room) => room.id === selectedRoom)
+  const exportTitle = selectedRoom === 'all' ? 'Dataset barang, semua ruangan' : `Dataset barang, ${visibleRooms[0]?.name ?? 'ruangan'}`
+  const exportColumns = ['Nama barang', 'Qty', 'Jumlah rusak aktif', 'Jumlah tersedia']
+  const exportGroups = visibleRooms.map((room) => ({
+    title: `${room.name} · ${room.location}`,
+    rows: inventoryItems.filter((item) => item.roomId === room.id && item.isActive).map((item) => [
+      item.name, item.quantity === null ? '' : String(item.quantity), String(item.activeDamagedQuantity),
+      item.quantity === null ? '' : String(Math.max(0, item.quantity - item.activeDamagedQuantity)),
+    ]),
+  }))
+  const exportRows = exportGroups.flatMap((group) => group.rows)
+  const exportRoomSlug = (selectedRoom === 'all' ? 'semua-ruangan' : visibleRooms[0]?.name ?? 'ruangan')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   const activeRooms = rooms.filter((room) => !room.isArchived)
   const activeNewRoomId = activeRooms.some((room) => room.id === newRoomId) ? newRoomId : activeRooms[0]?.id ?? ''
 
@@ -2525,7 +2619,10 @@ function DatasetView({ role, rooms, inventoryItems, onAddItem, onUpdateQuantity,
       <PageIntro title="Dataset" description="Lihat jumlah barang dan jumlah rusak aktif per ruangan." />
       <section className="panel dataset-panel">
         <div className="dataset-toolbar">
-          <h3>Dataset barang per ruangan</h3>
+          <div className="dataset-toolbar-main">
+            <h3>Dataset barang per ruangan</h3>
+            <ReportExportActions title={exportTitle} filename={`dataset-${exportRoomSlug}-${todayLocal()}.xlsx`} columns={exportColumns} rows={exportRows} groups={exportGroups} />
+          </div>
           <label className="dataset-filter">
             <span>Ruangan</span>
             <select value={selectedRoom} onChange={(event) => setSelectedRoom(event.target.value)}>
