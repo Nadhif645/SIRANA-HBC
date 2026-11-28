@@ -14,7 +14,9 @@ import {
   ClipboardCheck,
   ClipboardList,
   Clock3,
+  FileDown,
   FilePlus2,
+  FileSpreadsheet,
   FileText,
   ImagePlus,
   LayoutDashboard,
@@ -80,6 +82,7 @@ interface Ticket {
   damagedQuantity: number | null
   damageSeverity: DamageSeverity | null
   description: string
+  requesterId: string | null
   requesterName: string
   photoName: string | null
   photoData: string | null
@@ -215,6 +218,50 @@ function todayLocal() {
 
 function newId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function escapeReportHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character] ?? character)
+}
+
+function downloadReportCsv(filename: string, columns: string[], rows: string[][]) {
+  const escapeCell = (value: string) => {
+    const safeValue = /^[=+@\-\t\r]/.test(value) ? `'${value}` : value
+    return `"${safeValue.replace(/"/g, '""')}"`
+  }
+  const content = [columns, ...rows].map((row) => row.map(escapeCell).join(',')).join('\r\n')
+  const blob = new Blob([`\uFEFF${content}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function printReport(title: string, columns: string[], rows: string[][]) {
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) {
+    window.alert('Izinkan pop-up untuk membuka laporan dan menyimpannya sebagai PDF.')
+    return
+  }
+  const tableRows = rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeReportHtml(cell)}</td>`).join('')}</tr>`).join('')
+  printWindow.document.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeReportHtml(title)}</title><style>body{font:12px Arial,sans-serif;color:#19352e;margin:28px}h1{font-size:20px;margin:0 0 6px}p{color:#52645e;margin:0 0 18px}table{border-collapse:collapse;width:100%;font-size:10px}th,td{border:1px solid #ccd8d3;padding:7px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#e9f5ef}tr{break-inside:avoid}@page{size:landscape;margin:12mm}</style></head><body><h1>${escapeReportHtml(title)}</h1><p>Diekspor dari SIRANA HBC pada ${escapeReportHtml(new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeStyle: 'short' }).format(new Date()))}</p><table><thead><tr>${columns.map((column) => `<th>${escapeReportHtml(column)}</th>`).join('')}</tr></thead><tbody>${tableRows}</tbody></table><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250))</script></body></html>`)
+  printWindow.document.close()
+}
+
+function ReportExportActions({ title, filename, columns, rows }: {
+  title: string
+  filename: string
+  columns: string[]
+  rows: string[][]
+}) {
+  return <div className="report-export-actions" aria-label={`Unduh ${title}`}>
+    <button className="button button-quiet" type="button" disabled={rows.length === 0} onClick={() => printReport(title, columns, rows)}><FileDown size={15} />PDF</button>
+    <button className="button button-quiet" type="button" disabled={rows.length === 0} onClick={() => downloadReportCsv(filename, columns, rows)}><FileSpreadsheet size={15} />Excel (CSV)</button>
+  </div>
 }
 
 function formatDate(value: string) {
@@ -536,6 +583,7 @@ export default function HomePage() {
         return {
           id: ticket.id, number: ticket.ticket_number, title: ticket.title, category: ticket.category,
           equipment: ticket.equipment, location: ticket.location, description: ticket.description,
+          requesterId: ticket.reported_by ?? null,
           roomId: ticket.room_id ?? null,
           roomName: rooms.find((room) => room.id === ticket.room_id)?.name ?? null,
           inventoryItemId: ticket.inventory_item_id ?? null,
@@ -925,6 +973,7 @@ export default function HomePage() {
       equipment: saved.equipment, location: saved.location, description: saved.description,
       roomId: saved.room_id, roomName: room.name, inventoryItemId: saved.inventory_item_id,
       damagedQuantity: saved.damaged_quantity, damageSeverity: null,
+      requesterId: saved.reported_by ?? authUser.id,
       requesterName: saved.reported_by_name ?? profile?.fullName ?? 'Pengaju',
       photoName: photo ? 'Foto terlampir' : null, photoData: photoUrl, photoPath,
       createdAt: saved.created_at, status: saved.status as TicketStatus,
@@ -1629,6 +1678,7 @@ export default function HomePage() {
               {view === 'tickets' && (
                 <TicketsView
                   role={role}
+                  requesterId={authUser.id}
                   tickets={currentTickets}
                   onNavigate={changeView}
                   onDeleteTickets={deleteTickets}
@@ -1942,6 +1992,7 @@ function MetricCard({
 
 function TicketsView({
   role,
+  requesterId,
   tickets,
   onNavigate,
   onDeleteTickets,
@@ -1949,14 +2000,22 @@ function TicketsView({
   onReadReport,
 }: {
   role: Role
+  requesterId: string
   tickets: Ticket[]
   onNavigate: (view: View) => void
   onDeleteTickets: (ids: string[]) => Promise<boolean>
   onOpenPhoto: (name: string, url: string) => void
   onReadReport: (path: string | null, name: string) => void
 }) {
-  const shown = role === 'guru' ? tickets : tickets
+  const shown = role === 'guru' ? tickets.filter((ticket) => ticket.requesterId === requesterId) : tickets
   const isAdmin = role === 'admin'
+  const exportColumns = ['Nomor', 'Judul', 'Kategori', 'Fasilitas', 'Jumlah rusak', 'Ruangan/lokasi', 'Tingkat kerusakan', 'Deskripsi', 'Pengaju', 'Tanggal', 'Status']
+  const exportRows = shown.map((ticket) => [
+    ticket.number, ticket.title, ticket.category, ticket.equipment,
+    String(ticket.damagedQuantity ?? ''), ticket.roomName ?? ticket.location,
+    ticket.damageSeverity ? DAMAGE_SEVERITY_LABELS[ticket.damageSeverity] : '', ticket.description,
+    ticket.requesterName, formatShortDate(ticket.createdAt), TICKET_LABELS[ticket.status],
+  ])
   const [selectedTicketIds, setSelectedTicketIds] = useState<string[]>([])
   const [deletingTickets, setDeletingTickets] = useState(false)
   const allTicketsSelected = shown.length > 0 && shown.every((ticket) => selectedTicketIds.includes(ticket.id))
@@ -1991,7 +2050,7 @@ function TicketsView({
       <PageIntro
         title="Laporan kerusakan"
         description="Catat kerusakan fasilitas dan ikuti tahap pemeriksaannya sampai selesai."
-        action={role === 'guru' ? <button className="button button-primary" onClick={() => onNavigate('new-ticket')}><Plus size={16} />Buat laporan</button> : undefined}
+        action={<div className="page-intro-actions"><ReportExportActions title="Laporan kerusakan" filename={`laporan-kerusakan-${todayLocal()}.csv`} columns={exportColumns} rows={exportRows} />{role === 'guru' && <button className="button button-primary" onClick={() => onNavigate('new-ticket')}><Plus size={16} />Buat laporan</button>}</div>}
       />
       {isAdmin && shown.length > 0 && <div className="ticket-bulk-actions">
         <label className="booking-select-control"><input type="checkbox" checked={allTicketsSelected} onChange={toggleAllTicketSelection} aria-label="Pilih semua laporan kerusakan" /><span>Pilih semua laporan</span></label>
@@ -2209,6 +2268,14 @@ function BookingView({
   const [deletingBookings, setDeletingBookings] = useState(false)
   const userBookings = (canRequest ? bookings.filter((booking) => booking.requesterId === requesterId) : bookings)
     .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start))
+  const exportableBookings = userBookings.filter((booking) => booking.createdAt)
+  const exportColumns = ['Ruangan', 'Lokasi', 'Pengaju', 'Tanggal', 'Mulai', 'Selesai', 'Kapasitas', 'Keperluan', 'Nama surat', 'Status', 'Catatan penolakan']
+  const exportRows = exportableBookings.map((booking) => {
+    const room = rooms.find((item) => item.id === booking.roomId)
+    return [room?.name ?? 'Ruangan tidak ditemukan', room?.location ?? '', booking.requester,
+      formatDate(booking.date), booking.start, booking.end, String(booking.requestedCapacity),
+      booking.purpose, booking.letterName ?? '', BOOKING_LABELS[booking.status], booking.rejectionNote ?? '']
+  })
   const displayRooms = rooms
   const selectedCapacity = Number(bookingCapacity) || 0
   const capacityFits = selectedCapacity > 0 && selectedCapacity <= (activeRoom?.capacity ?? 0)
@@ -2357,7 +2424,7 @@ function BookingView({
       </div>
 
       <section className="panel booking-history-panel">
-        <div className="panel-heading"><div><h3>{canRequest ? 'Pengajuan saya' : 'Daftar pengajuan booking'}</h3><p>Status rekomendasi, persetujuan, dan dokumen booking</p></div>{isAdmin && userBookings.length > 0 && <button className="button button-danger" onClick={deleteSelectedBookings} disabled={visibleSelectedBookingIds.length === 0 || deletingBookings}><Trash2 size={15} />{deletingBookings ? 'Menghapus…' : `Hapus terpilih${visibleSelectedBookingIds.length > 0 ? ` (${visibleSelectedBookingIds.length})` : ''}`}</button>}</div>
+        <div className="panel-heading"><div><h3>{canRequest ? 'Pengajuan saya' : 'Daftar pengajuan booking'}</h3><p>Status rekomendasi, persetujuan, dan dokumen booking</p></div><div className="booking-history-actions"><ReportExportActions title="Booking ruangan" filename={`booking-ruangan-${todayLocal()}.csv`} columns={exportColumns} rows={exportRows} />{isAdmin && userBookings.length > 0 && <button className="button button-danger" onClick={deleteSelectedBookings} disabled={visibleSelectedBookingIds.length === 0 || deletingBookings}><Trash2 size={15} />{deletingBookings ? 'Menghapus…' : `Hapus terpilih${visibleSelectedBookingIds.length > 0 ? ` (${visibleSelectedBookingIds.length})` : ''}`}</button>}</div></div>
         {userBookings.length === 0 ? (
           <EmptyState icon={CalendarDays} title="Belum ada pengajuan booking" description="Permintaan booking akan muncul setelah diajukan." />
         ) : (

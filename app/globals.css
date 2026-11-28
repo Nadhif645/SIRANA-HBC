@@ -164,6 +164,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .page-intro h2 { margin-top: 5px; font-size: 25px; }
 .page-intro p:not(.eyebrow) { max-width: 680px; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .page-intro .eyebrow { margin: 0; }
+.page-intro-actions, .report-export-actions, .booking-history-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.report-export-actions .button { min-height: 44px; }
+.booking-history-actions { justify-content: flex-end; }
 .button { min-height: 44px; display: inline-flex; justify-content: center; align-items: center; gap: 8px; border: 1px solid transparent; border-radius: 8px; padding: 0 13px; font-size: 11px; font-weight: 700; cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .15s ease; white-space: nowrap; }
 .button:disabled { opacity: .5; cursor: not-allowed; }
 .button-primary { color: white; background: var(--green); }
@@ -466,6 +469,9 @@ td small { margin-top: 4px; color: var(--muted); font-size: 9px; }
   .ticket-card { flex-direction: column; padding: 14px; }
   .ticket-card-side { width: 100%; flex-basis: auto; }
   .ticket-bulk-actions { justify-content: space-between; }
+  .page-intro { align-items: flex-start; flex-direction: column; }
+  .page-intro-actions, .booking-history-actions { width: 100%; justify-content: flex-start; }
+  .booking-history-panel .panel-heading { align-items: flex-start; flex-direction: column; }
 
   .ticket-rejection-panel { width: 100%; max-width: none; }
 
